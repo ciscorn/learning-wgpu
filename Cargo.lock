@@ -1544,23 +1544,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "17f77d76d837a7830fe1d4f12b7b4ba4192c1888001c7164257e4bc6d21d96b4"
 
 [[package]]
-name = "tutorial1"
-version = "0.1.0"
-dependencies = [
- "cfg-if",
- "console_error_panic_hook",
- "console_log",
- "env_logger",
- "log",
- "pollster",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
- "winit",
-]
-
-[[package]]
 name = "tutorial2"
 version = "0.1.0"
 dependencies = [
@@ -1581,7 +1564,6 @@ dependencies = [
 name = "tutorial3"
 version = "0.1.0"
 dependencies = [
- "bytemuck",
  "cfg-if",
  "console_error_panic_hook",
  "console_log",
@@ -1597,6 +1579,24 @@ dependencies = [
 
 [[package]]
 name = "tutorial4"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "cfg-if",
+ "console_error_panic_hook",
+ "console_log",
+ "env_logger",
+ "log",
+ "pollster",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
+name = "tutorial5"
 version = "0.1.0"
 dependencies = [
  "bytemuck",

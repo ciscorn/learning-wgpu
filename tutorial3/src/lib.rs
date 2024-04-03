@@ -1,4 +1,3 @@
-use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{self, EventLoop},
@@ -16,32 +15,9 @@ struct State<'w> {
     surface_config: wgpu::SurfaceConfiguration,
 
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    num_indices: u32,
 
     size: winit::dpi::PhysicalSize<u32>,
     window: &'w Window,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct MyVertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-impl MyVertex {
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
-        const ATRIBUTES: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<MyVertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &ATRIBUTES,
-        }
-    }
 }
 
 impl<'w> State<'w> {
@@ -69,9 +45,7 @@ impl<'w> State<'w> {
                     &wgpu::DeviceDescriptor {
                         label: None,
                         required_features: wgpu::Features::empty(),
-                        // required_limits: wgpu::Limits::downlevel_defaults()
-                        //     .using_resolution(adapter.limits()),
-                        required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                        required_limits: wgpu::Limits::downlevel_defaults()
                             .using_resolution(adapter.limits()),
                     },
                     None,
@@ -127,7 +101,7 @@ impl<'w> State<'w> {
                 vertex: wgpu::VertexState {
                     module: &shader_module,
                     entry_point: "vs_main",
-                    buffers: &[MyVertex::layout()],
+                    buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
@@ -153,52 +127,12 @@ impl<'w> State<'w> {
             })
         };
 
-        // Create a vertex buffer
-        const VERTICES: &[MyVertex] = &[
-            MyVertex {
-                position: [-0.0868241, 0.49240386, 0.0],
-                color: [0.5, 0.0, 0.5],
-            }, // A
-            MyVertex {
-                position: [-0.49513406, 0.06958647, 0.0],
-                color: [0.5, 0.0, 0.5],
-            }, // B
-            MyVertex {
-                position: [-0.21918549, -0.44939706, 0.0],
-                color: [0.5, 0.0, 0.5],
-            }, // C
-            MyVertex {
-                position: [0.35966998, -0.3473291, 0.0],
-                color: [0.5, 0.0, 0.5],
-            }, // D
-            MyVertex {
-                position: [0.44147372, 0.2347359, 0.0],
-                color: [0.5, 0.0, 0.5],
-            }, // E
-        ];
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            usage: wgpu::BufferUsages::VERTEX,
-            contents: bytemuck::cast_slice(VERTICES),
-        });
-
-        const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            usage: wgpu::BufferUsages::INDEX,
-            contents: bytemuck::cast_slice(INDICES),
-        });
-        let num_indices = INDICES.len() as u32;
-
         State {
             surface,
             device,
             queue,
             surface_config,
             render_pipeline,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
             size,
             window,
         }
@@ -221,13 +155,9 @@ impl<'w> State<'w> {
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let surface_texture = self.surface.get_current_texture()?;
-        let surface_texture_view =
-            surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor {
-                    format: Some(self.surface_config.format.add_srgb_suffix()),
-                    ..Default::default()
-                });
+        let surface_texture_view = surface_texture
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut command_encoder = self
             .device
@@ -255,9 +185,7 @@ impl<'w> State<'w> {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(command_encoder.finish()));

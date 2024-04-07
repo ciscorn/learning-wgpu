@@ -17,6 +17,7 @@ pollster.workspace = true
 bytemuck.workspace = true
 image.workspace = true
 glam.workspace = true
+instant.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook.workspace = true 

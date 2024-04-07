@@ -1,8 +1,10 @@
+use instant::Instant;
+
+use glam::{vec3, Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{self, EventLoop},
-    keyboard::{Key, NamedKey},
     window::{Window, WindowBuilder},
 };
 
@@ -20,10 +22,21 @@ struct State<'w> {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
-    bind_group: wgpu::BindGroup,
+
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
+    texture_bind_group: wgpu::BindGroup,
+
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
+
+    depth_texture_view: wgpu::TextureView,
 
     size: winit::dpi::PhysicalSize<u32>,
     window: &'w Window,
+    instant: Instant,
+    time: f32,
+    value_d: f32,
 }
 
 #[repr(C)]
@@ -42,6 +55,51 @@ impl MyVertex {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<MyVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ATRIBUTES,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Instance {
+    x: i32,
+    z: i32,
+}
+
+impl Instance {
+    fn to_raw(self, t: f32) -> InstanceRaw {
+        let d = ((self.x * self.x + self.z * self.z) as f32).sqrt();
+        let translation = Vec3::new(
+            self.x as f32,
+            (d + t * 10.).sin() * d / 10. + (d / 100.).powf(3.) * (t * 1.0).sin() * 10.0,
+            self.z as f32,
+        );
+        let rotation = Quat::from_axis_angle(
+            Vec3::new(self.x as f32, (d + t * 10.).sin() * d / 100., self.z as f32).normalize(),
+            t,
+        );
+
+        // raw item for the instance buffer
+        InstanceRaw {
+            matrix: Mat4::from_rotation_translation(rotation, translation).to_cols_array(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceRaw {
+    matrix: [f32; 16],
+}
+
+impl InstanceRaw {
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &ATRIBUTES,
         }
     }
@@ -95,6 +153,32 @@ impl MyTexture {
 
         Self {
             view: color_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        }
+    }
+
+    pub fn create_depth_texture(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> Self {
+        let size = wgpu::Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        };
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size,
+            dimension: wgpu::TextureDimension::D2,
+            mip_level_count: 1,
+            sample_count: 1,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        Self {
+            view: depth_texture.create_view(&wgpu::TextureViewDescriptor::default()),
         }
     }
 }
@@ -161,27 +245,43 @@ impl<'w> State<'w> {
 
         surface.configure(&device, &surface_config);
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::all(),
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::all(),
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                }],
+            });
+
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::all(),
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::all(),
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
 
         // Construct a render pipeline
         let render_pipeline = {
@@ -192,7 +292,7 @@ impl<'w> State<'w> {
 
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&bind_group_layout],
+                bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -202,7 +302,7 @@ impl<'w> State<'w> {
                 vertex: wgpu::VertexState {
                     module: &shader_module,
                     entry_point: "vs_main",
-                    buffers: &[MyVertex::layout()],
+                    buffers: &[MyVertex::layout(), InstanceRaw::layout()],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
@@ -217,12 +317,19 @@ impl<'w> State<'w> {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
+                    // cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: None,
                     unclipped_depth: false,
                     polygon_mode: wgpu::PolygonMode::Fill,
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
                 multisample: wgpu::MultisampleState::default(),
                 multiview: None,
             })
@@ -280,9 +387,43 @@ impl<'w> State<'w> {
             ..Default::default()
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let instances = {
+            let mut instances = Vec::new();
+            const N: i32 = 200;
+            for z in -N..=N {
+                for x in -N..=N {
+                    instances.push(Instance { x, z });
+                }
+            }
+            instances
+        };
+
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            layout: &bind_group_layout,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            size: (std::mem::size_of::<InstanceRaw>() * instances.len()) as u64,
+            mapped_at_creation: false,
+        });
+
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            size: std::mem::size_of::<Mat4>() as u64,
+            mapped_at_creation: false,
+        });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -295,6 +436,8 @@ impl<'w> State<'w> {
             ],
         });
 
+        let depth_texture_view = MyTexture::create_depth_texture(&device, &surface_config).view;
+
         State {
             surface,
             device,
@@ -303,10 +446,18 @@ impl<'w> State<'w> {
             render_pipeline,
             vertex_buffer,
             index_buffer,
-            bind_group,
+            uniform_buffer,
+            uniform_bind_group,
+            texture_bind_group,
+            instances,
+            instance_buffer,
             num_indices,
+            depth_texture_view,
             size,
             window,
+            time: 0.0,
+            instant: Instant::now(),
+            value_d: 10.0,
         }
     }
 
@@ -319,10 +470,50 @@ impl<'w> State<'w> {
         self.surface_config.height = new_size.height;
         self.surface.configure(&self.device, &self.surface_config);
         self.window.request_redraw();
+        self.depth_texture_view =
+            MyTexture::create_depth_texture(&self.device, &self.surface_config).view;
     }
 
     fn update(&mut self) {
-        // do nothing
+        self.time += self.instant.elapsed().as_secs_f32();
+        self.instant = Instant::now();
+
+        {
+            let raws: Vec<_> = self
+                .instances
+                .iter()
+                .map(|inst| inst.to_raw(self.time))
+                .collect();
+            self.queue
+                .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&raws))
+        }
+
+        let view = {
+            let d = self.value_d;
+            let theta = self.time * 0.1;
+            let phi = ((self.time * 0.7).cos() + 1.0) * std::f32::consts::PI / 8.0;
+            glam::Mat4::look_at_lh(
+                vec3(
+                    theta.cos() * phi.cos() * d,
+                    phi.sin() * d,
+                    theta.sin() * phi.cos() * d,
+                ),
+                vec3(0., 0., 0.),
+                vec3(0., 1., 0.),
+            )
+        };
+        let projection = Mat4::perspective_lh(
+            90.0,
+            self.size.width as f32 / self.size.height as f32,
+            0.1,
+            1000.0,
+        );
+        let view_proj = projection * view;
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&view_proj.to_cols_array()),
+        )
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -347,24 +538,33 @@ impl<'w> State<'w> {
                     resolve_target: None, // for MSAA
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.0,
+                            g: 0.06,
+                            b: 0.1,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as u32);
         }
 
         self.queue.submit(std::iter::once(command_encoder.finish()));
@@ -384,18 +584,16 @@ pub async fn run(event_loop: event_loop::EventLoop<()>, window: Window) {
                     WindowEvent::Resized(physical_size) => {
                         state.resize(physical_size);
                     }
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                state: ElementState::Pressed,
-                                logical_key: Key::Named(NamedKey::Escape),
-                                ..
-                            },
-                        ..
-                    } => {
+                    WindowEvent::CloseRequested => {
                         target.exit();
                     }
+                    WindowEvent::MouseWheel { delta, .. } => match delta {
+                        MouseScrollDelta::PixelDelta(pos) => {
+                            state.value_d += (pos.y / 20.0) as f32;
+                            state.value_d = state.value_d.max(0.1);
+                        }
+                        MouseScrollDelta::LineDelta(_, _) => {}
+                    },
                     WindowEvent::RedrawRequested => {
                         state.update();
                         match state.render() {

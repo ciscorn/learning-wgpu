@@ -155,9 +155,13 @@ impl<'w> State<'w> {
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let surface_texture = self.surface.get_current_texture()?;
-        let surface_texture_view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let surface_texture_view =
+            surface_texture
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(self.surface_config.format.add_srgb_suffix()),
+                    ..Default::default()
+                });
 
         let mut command_encoder = self
             .device

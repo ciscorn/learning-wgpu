@@ -1,11 +1,10 @@
-use std::time::Instant;
-
-use glam::{vec3, Mat4};
+use glam::{vec3, Mat4, Quat, Vec3};
+use instant::Instant;
+use rand::seq::SliceRandom;
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{self, EventLoop},
-    keyboard::{Key, NamedKey},
     window::{Window, WindowBuilder},
 };
 
@@ -28,10 +27,14 @@ struct State<'w> {
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group: wgpu::BindGroup,
 
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
+
     size: winit::dpi::PhysicalSize<u32>,
     window: &'w Window,
-    time: f32,
     instant: Instant,
+    time: f32,
+    value_d: f32,
 }
 
 #[repr(C)]
@@ -50,6 +53,51 @@ impl MyVertex {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<MyVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ATRIBUTES,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Instance {
+    x: i32,
+    z: i32,
+}
+
+impl Instance {
+    fn to_raw(self, t: f32) -> InstanceRaw {
+        let d = ((self.x * self.x + self.z * self.z) as f32).sqrt();
+        let translation = Vec3::new(
+            self.x as f32,
+            (d + t * 10.).sin() * d / 10. + (d / 100.).powf(3.) * (t * 1.0).sin() * 10.0,
+            self.z as f32,
+        );
+        let rotation = Quat::from_axis_angle(
+            Vec3::new(self.x as f32, (d + t * 10.).sin() * d / 100., self.z as f32).normalize(),
+            t,
+        );
+
+        // raw item for the instance buffer
+        InstanceRaw {
+            matrix: Mat4::from_rotation_translation(rotation, translation).to_cols_array(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceRaw {
+    matrix: [f32; 16],
+}
+
+impl InstanceRaw {
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        const ATRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
+
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
             attributes: &ATRIBUTES,
         }
     }
@@ -132,9 +180,7 @@ impl<'w> State<'w> {
                     &wgpu::DeviceDescriptor {
                         label: None,
                         required_features: wgpu::Features::empty(),
-                        // required_limits: wgpu::Limits::downlevel_defaults()
-                        //     .using_resolution(adapter.limits()),
-                        required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                        required_limits: wgpu::Limits::downlevel_defaults()
                             .using_resolution(adapter.limits()),
                     },
                     None,
@@ -228,7 +274,7 @@ impl<'w> State<'w> {
                 vertex: wgpu::VertexState {
                     module: &shader_module,
                     entry_point: "vs_main",
-                    buffers: &[MyVertex::layout()],
+                    buffers: &[MyVertex::layout(), InstanceRaw::layout()],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader_module,
@@ -307,6 +353,25 @@ impl<'w> State<'w> {
             ..Default::default()
         });
 
+        let instances = {
+            let mut instances = Vec::new();
+            const N: i32 = 200;
+            for z in -N..=N {
+                for x in -N..=N {
+                    instances.push(Instance { x, z });
+                }
+            }
+            instances.shuffle(&mut rand::thread_rng());
+            instances
+        };
+
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            size: (std::mem::size_of::<InstanceRaw>() * instances.len()) as u64,
+            mapped_at_creation: false,
+        });
+
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -349,11 +414,14 @@ impl<'w> State<'w> {
             uniform_buffer,
             uniform_bind_group,
             texture_bind_group,
+            instances,
+            instance_buffer,
             num_indices,
             size,
             window,
             time: 0.0,
             instant: Instant::now(),
+            value_d: 10.0,
         }
     }
 
@@ -372,14 +440,25 @@ impl<'w> State<'w> {
         self.time += self.instant.elapsed().as_secs_f32();
         self.instant = Instant::now();
 
-        let local = Mat4::from_rotation_x(self.time * 7.);
+        {
+            let raws: Vec<_> = self
+                .instances
+                .iter()
+                .map(|inst| inst.to_raw(self.time))
+                .collect();
+            self.queue
+                .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&raws))
+        }
+
         let view = {
-            let d = (self.time * 3.).cos() * 0.5 + 1.2;
+            let d = self.value_d.max(0.1);
+            let theta = self.time * 0.1;
+            let phi = ((self.time * 0.7).cos() + 1.0) * std::f32::consts::PI / 8.0;
             glam::Mat4::look_at_lh(
                 vec3(
-                    (self.time * 3.).cos() * d,
-                    (self.time * 5.).sin() * 0.5,
-                    (self.time * 3.).sin() * d,
+                    theta.cos() * phi.cos() * d,
+                    phi.sin() * d,
+                    theta.sin() * phi.cos() * d,
                 ),
                 vec3(0., 0., 0.),
                 vec3(0., 1., 0.),
@@ -389,9 +468,9 @@ impl<'w> State<'w> {
             90.0,
             self.size.width as f32 / self.size.height as f32,
             0.1,
-            100.0,
+            1000.0,
         );
-        let view_proj = projection * view * local;
+        let view_proj = projection * view;
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -421,9 +500,9 @@ impl<'w> State<'w> {
                     resolve_target: None, // for MSAA
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.0,
+                            g: 0.06,
+                            b: 0.1,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -436,10 +515,11 @@ impl<'w> State<'w> {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as u32);
         }
 
         self.queue.submit(std::iter::once(command_encoder.finish()));
@@ -459,18 +539,16 @@ pub async fn run(event_loop: event_loop::EventLoop<()>, window: Window) {
                     WindowEvent::Resized(physical_size) => {
                         state.resize(physical_size);
                     }
-                    WindowEvent::CloseRequested
-                    | WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                state: ElementState::Pressed,
-                                logical_key: Key::Named(NamedKey::Escape),
-                                ..
-                            },
-                        ..
-                    } => {
+                    WindowEvent::CloseRequested => {
                         target.exit();
                     }
+                    WindowEvent::MouseWheel { delta, .. } => match delta {
+                        MouseScrollDelta::PixelDelta(pos) => {
+                            state.value_d += (pos.y / 20.0) as f32;
+                            state.value_d = state.value_d.max(0.1);
+                        }
+                        MouseScrollDelta::LineDelta(_, _) => {}
+                    },
                     WindowEvent::RedrawRequested => {
                         state.update();
                         match state.render() {

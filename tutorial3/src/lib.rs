@@ -86,7 +86,7 @@ impl<'w> State<'w> {
         let render_pipeline = {
             let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
             });
 
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

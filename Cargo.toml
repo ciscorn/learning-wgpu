@@ -5,18 +5,19 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-env_logger = "0.11"
 winit = "0.29"
-log = "0.4"
 wgpu = { version = "0.19" }
+env_logger = "0.11"
+glam = "0.27"
+log = "0.4"
 cfg-if = "1.0"
-pollster = "0.3.0"
+pollster = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-image = { version = "0.25.1", default-features = false, features = ["png", "jpeg"] }
-bytemuck = { version = "1.15.0", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+bytemuck = { version = "1.15", features = ["derive"] }
 web-sys = { version = "0.3", features = [
     "Document",
     "Window",

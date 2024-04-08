@@ -389,7 +389,7 @@ impl<'w> State<'w> {
 
         let instances = {
             let mut instances = Vec::new();
-            const N: i32 = 200;
+            const N: i32 = 300;
             for z in -N..=N {
                 for x in -N..=N {
                     instances.push(Instance { x, z });
